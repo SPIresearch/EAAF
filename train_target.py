@@ -311,26 +311,39 @@ def train_target_primary(args,dset_loaders,netF,netB,netC,netE,netEC,primary_idx
         pse_smooth_mask=torch.zeros(mem_label.shape[0])
         all_alpha=all_evidence+1
         
-        ELI=torch.log(1+(torch.sum(all_alpha)-torch.max(all_alpha,1)[0])/(torch.max(all_alpha,1)[0]))
-        uncertainty=args.class_num/(torch.max(all_alpha,1)[0]+args.class_num)
+        EAU_ini=torch.log(1+(torch.sum(all_alpha)-torch.max(all_alpha,1)[0])/(torch.max(all_alpha,1)[0]))
+        E_inter_pre=all_alpha/(np.sum(all_alpha,1,keepdims=True))
+        distance = fea_bank@ fea_bank.T /3
+        dis_near, idx_near = torch.topk(distance, dim=-1, largest=True, k=args.r + 1)
+        idx_near = idx_near[:, 1:]  # batch x K
+        dis_near = dis_near[:, 1:]
+        
+        E_inter=np.sum(np.abs(E_inter_pre[idx_near[:,1]]-E_inter_pre))
+        for i in range(2,args.r + 1):
+            E_inter=E_inter+np.sum(np.abs(E_inter_pre[idx_near[:,i]]-E_inter_pre))
+       
+        EAU=EAU_ini*E_inter
+
+
+        EPU=args.class_num/(torch.max(all_alpha,1)[0]+args.class_num)
         for i in range(args.class_num):
-            eli_class_i=ELI[mem_label==i]
-            threshold[i]=torch.mean(eli_class_i)+2*torch.std(eli_class_i)
+            eau_class_i=EAU[mem_label==i]
+            threshold[i]=torch.mean(eau_class_i)+2*torch.std(eau_class_i)
 
         for i in range(args.class_num):
-            unc_class_i=uncertainty[mem_label==i]
+            unc_class_i=EPU[mem_label==i]
             threshold_unc[i]=torch.mean(unc_class_i)+2*torch.std(unc_class_i)
 
         for i in range(mem_label.shape[0]):
             p=mem_label[i]
-            if ELI[i]>threshold[p]:
+            if EAU[i]>threshold[p]:
                 local_inconsistency_mask[i]=1
             else:
                 local_inconsistency_mask[i]=0
 
         for i in range(mem_label.shape[0]):
             p=mem_label[i]
-            if uncertainty[i]>threshold_unc[p]:
+            if EPU[i]>threshold_unc[p]:
                 pse_smooth_mask[i]=1
             else:
                 pse_smooth_mask[i]=0
@@ -424,7 +437,7 @@ def train_target_primary(args,dset_loaders,netF,netB,netC,netE,netEC,primary_idx
             targets_1 = torch.zeros((pred_u1.size(0),65)).scatter_(1, pred_u1.unsqueeze(1).cpu(), 1)
             pred_u2=mem_sec_label[tar_idx]
             targets_2 = torch.zeros((pred_u2.size(0),65)).scatter_(1, pred_u2.unsqueeze(1).cpu(), 1)
-            unc=uncertainty[tar_idx].unsqueeze(1)
+            unc=EPU[tar_idx].unsqueeze(1)
             targets=targets_1*(1-0.5*unc)+targets_2*(0.5*unc)
             smoothed=(pse_smooth_mask[tar_idx]==1)
             #print("len smooth",sum(smoothed),'acc',test_acc(pred_u1,smoothed,all_label[tar_idx]))
@@ -450,14 +463,14 @@ def train_target_primary(args,dset_loaders,netF,netB,netC,netE,netEC,primary_idx
                 score_bank[tar_idx] = softmax_out[:features_test.shape[0]//2].detach().clone()
 
                 distance = fea_bank[tar_idx] @ fea_bank.T /3
-                dis_near, idx_near = torch.topk(distance, dim=-1, largest=True, k=args.K + 1)
+                dis_near, idx_near = torch.topk(distance, dim=-1, largest=True, k=args.r + 1)
                 idx_near = idx_near[:, 1:]  # batch x K
                 dis_near = dis_near[:, 1:]
                 score_near = score_bank[idx_near]  # batch x K x C
 
             # nn
             softmax_out_un = softmax_out[:features_test.shape[0]//2].unsqueeze(1).expand(
-                -1, args.K, -1
+                -1, args.r, -1
             )  # batch x K x C
             #pdb.set_trace()
             local_loss_sec = torch.mean((F.kl_div(softmax_out_un, score_near, reduction="none").sum(-1)).sum(1)) # Equal to - dot product
@@ -808,7 +821,7 @@ def train_target(args):
     if args.net[0:3] == 'res':
         netF_list = [network.ResBase(res_name=args.net).cuda() for i in range(len(args.src))]
       
-    elif args.net[0:3] == 'vgg':
+    eauf args.net[0:3] == 'vgg':
         netF_list = [network.VGGBase(vgg_name=args.net).cuda() for i in range(len(args.src))]
 
     netB_list = [network.feat_bottleneck(type=args.classifier, feature_dim=netF_list[i].in_features,
@@ -1081,7 +1094,7 @@ if __name__ == "__main__":
     parser.add_argument('--lr', type=float, default=1e-2, help="learning rate")
     parser.add_argument('--net', type=str, default='resnet50', help="vgg16, resnet50, res101")
     parser.add_argument('--seed', type=int, default=2023, help="random seed")
-    parser.add_argument("--K", type=int, default=3)
+    parser.add_argument("--r", type=int, default=3)
     parser.add_argument('--gent', type=bool, default=True)
     parser.add_argument('--ent', type=bool, default=True)
     parser.add_argument('--threshold', type=int, default=0)
