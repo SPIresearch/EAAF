@@ -178,7 +178,7 @@ def train_target_primary(args,dset_loaders,mddn_F,mddn_C1,mddn_C2,mddn_E1,mddn_E
         return alpha_a
     def initial(args):
         param_group = []
-        param_group_c=[]
+   
         for k, v in mddn_F.named_parameters():
             if args.lr_decay1 > 0:
                 param_group += [{'params': v, 'lr': args.lr * args.lr_decay1}]
@@ -200,16 +200,15 @@ def train_target_primary(args,dset_loaders,mddn_F,mddn_C1,mddn_C2,mddn_E1,mddn_E
             v.requires_grad = False
             #param_group_c += [{"params": v, "lr": args.lr * 1}] 
         for k, v in mddn_E2.named_parameters():
-            param_group_c += [{"params": v, "lr": args.lr * 1}]  
+            v.requires_grad = False  
 
         optimizer = optim.SGD(param_group)
         optimizer = op_copy(optimizer)
 
-        optimizer_c = optim.SGD(param_group_c)
-        optimizer_c = op_copy(optimizer_c)
-        return mddn_F,mddn_C1,mddn_C2,mddn_E1,mddn_E2,optimizer,optimizer_c
+      
+        return mddn_F,mddn_C1,mddn_C2,mddn_E1,mddn_E2,optimizer
 
-    mddn_F,mddn_C1,mddn_C2,mddn_E1,mddn_E2,optimizer,optimizer_c=initial(args)
+    mddn_F,mddn_C1,mddn_C2,mddn_E1,mddn_E2,optimizer=initial(args)
     max_iter =len(dset_loaders["target"])
    
     iter_num = 0
