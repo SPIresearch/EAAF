@@ -137,7 +137,7 @@ def get_list(a,b):
         tmp=[]
     return tmp
 
-def train_target_primary(args,dset_loaders,netF,netB,netC,netE,netEC,primary_idx,unc_list,evi_list,out_list,pse_list,fea_list):
+def train_target_primary(args,dset_loaders,mddn_F,mddn_C1,mddn_C2,mddn_E1,mddn_E2,primary_idx,unc_list,evi_list,out_list,pse_list,fea_list):
     def DS_Combin_two(alpha1, alpha2,):
         """
         :param alpha1: Dirichlet distribution parameters of view 1
@@ -179,27 +179,27 @@ def train_target_primary(args,dset_loaders,netF,netB,netC,netE,netEC,primary_idx
     def initial(args):
         param_group = []
         param_group_c=[]
-        for k, v in netF.named_parameters():
+        for k, v in mddn_F.named_parameters():
             if args.lr_decay1 > 0:
                 param_group += [{'params': v, 'lr': args.lr * args.lr_decay1}]
             else:
                 v.requires_grad = False
-        for k, v in netB.named_parameters():
+        for k, v in mddn_C1.named_parameters():
             if args.lr_decay2 > 0:
                 param_group += [{'params': v, 'lr': args.lr * args.lr_decay2}]
             else:
                 v.requires_grad = False
-        for k, v in netE.named_parameters():
+        for k, v in mddn_E1.named_parameters():
             if args.lr_decay2 > 0:
                 param_group += [{'params': v, 'lr': args.lr * args.lr_decay2}]
             else:
                 v.requires_grad = False
         optimizer = optim.SGD(param_group)
         optimizer = op_copy(optimizer)
-        for k, v in netC.named_parameters():
+        for k, v in mddn_C2.named_parameters():
             v.requires_grad = False
             #param_group_c += [{"params": v, "lr": args.lr * 1}] 
-        for k, v in netEC.named_parameters():
+        for k, v in mddn_E2.named_parameters():
             param_group_c += [{"params": v, "lr": args.lr * 1}]  
 
         optimizer = optim.SGD(param_group)
@@ -207,17 +207,17 @@ def train_target_primary(args,dset_loaders,netF,netB,netC,netE,netEC,primary_idx
 
         optimizer_c = optim.SGD(param_group_c)
         optimizer_c = op_copy(optimizer_c)
-        return netF,netB,netC,netE,netEC,optimizer,optimizer_c
+        return mddn_F,mddn_C1,mddn_C2,mddn_E1,mddn_E2,optimizer,optimizer_c
 
-    netF,netB,netC,netE,netEC,optimizer,optimizer_c=initial(args)
+    mddn_F,mddn_C1,mddn_C2,mddn_E1,mddn_E2,optimizer,optimizer_c=initial(args)
     max_iter =len(dset_loaders["target"])
    
     iter_num = 0
 
     
-    netF.eval()
-    netB.eval()
-    netC.eval()
+    mddn_F.eval()
+    mddn_C1.eval()
+    mddn_C2.eval()
     num_sample = len(dset_loaders["target"].dataset)
     fea_bank=dict()
   
@@ -238,14 +238,14 @@ def train_target_primary(args,dset_loaders,netF,netB,netC,netE,netEC,primary_idx
                     indx = data[-1]
                     # labels = data[1]
                     inputs = inputs.cuda()
-                    fea=netF(inputs)
-                    fea = netB(fea)
+                    fea=mddn_F(inputs)
+                    fea = mddn_C1(fea)
                     fea_norm = F.normalize(fea)
                     for i in range(3):
                         if i==primary_idx:
                             continue
                         fea_norm=torch.cat([fea_norm,fea_list_norm[i][indx].cuda()],1)
-                    outputs = netC(fea)
+                    outputs = mddn_C2(fea)
                     outputs = nn.Softmax(-1)(outputs)
 
                     fea_bank[indx] = fea_norm.detach().clone().cpu()
@@ -257,24 +257,24 @@ def train_target_primary(args,dset_loaders,netF,netB,netC,netE,netEC,primary_idx
         epoch+=1
         iter_num=0
         lr_scheduler(optimizer, iter_num=epoch, max_iter=fuse_epoch)
-        netF.eval()
-        netB.eval()
-        netE.eval()
-        netC.eval()
-        netEC.eval()
+        mddn_F.eval()
+        mddn_C1.eval()
+        mddn_E1.eval()
+        mddn_C2.eval()
+        mddn_E2.eval()
        
-        mem_label,mem_sec_label,all_evidence,all_label = obtain_label(dset_loaders['test'], netF, netB, netC,netE, netEC,primary_idx,out_list, fea_list,evi_list,args)
+        mem_label,mem_sec_label,all_evidence,all_label = obtain_label(dset_loaders['test'], mddn_F, mddn_C1, mddn_C2,mddn_E1, mddn_E2,primary_idx,out_list, fea_list,evi_list,args)
         #pdb.set_trace()
         unc_list[primary_idx]=args.class_num/(torch.max(all_evidence+1,1)[0])
        
         mem_label = torch.from_numpy(mem_label)
 
         pse_list[primary_idx]=mem_label
-        netF.train()
-        netB.train()
-        netE.train()
+        mddn_F.train()
+        mddn_C1.train()
+        mddn_E1.train()
         
-        print('original acc:',test_acc(pse_list[primary_idx],list(range(len(unc_list[0]))),all_label))
+    
         
 
 
@@ -290,11 +290,11 @@ def train_target_primary(args,dset_loaders,netF,netB,netC,netE,netEC,primary_idx
                 if i!=primary_idx:
                     source_pse[:,i]=pse_list[i]
                     source_unc[:,i]=unc_list[i]
-                    print('test acc:',test_acc(source_pse[:,i],list(range(len(unc_list[0]))),all_label))
+                   
                 else:
                     source_pse[:,i]=pse_list[i]
                     source_unc[:,i]=unc_list[i]*0.6
-                    print('test primary_idx acc:',test_acc(source_pse[:,i],list(range(len(unc_list[0]))),all_label))
+                   
         else:       
             source_pse[:,primary_idx]=pse_list[primary_idx]
             source_unc[:,primary_idx]=unc_list[primary_idx]*0.6
@@ -362,21 +362,21 @@ def train_target_primary(args,dset_loaders,netF,netB,netC,netE,netEC,primary_idx
             iter_num += 1
             agg_loss = torch.tensor(0.0).cuda()
             inputs_test = inputs_test.cuda()
-            fea=netF(inputs_test)
-            evidence = netEC(netE(fea))
+            fea=mddn_F(inputs_test)
+            evidence = mddn_E2(mddn_E1(fea))
 
             alpha = evidence+1
             S=torch.sum(alpha,1,keepdim=True)
-            features_test = netB(fea)
-            outputs_test = netC(features_test)
+            features_test = mddn_C1(fea)
+            outputs_test = mddn_C2(features_test)
             #pred=mem_label[tar_idx].cuda()
             #label=label.cuda()
             with torch.no_grad():
-                f=netF(inputs_test)
-                f1 = netB(f)
-                o1 = netC(f1).cpu()
+                f=mddn_F(inputs_test)
+                f1 = mddn_C1(f)
+                o1 = mddn_C2(f1).cpu()
                 out_list[primary_idx][tar_idx] =o1.cpu()
-                primary_evidence = netEC(netE(f)).detach()
+                primary_evidence = mddn_E2(mddn_E1(f)).detach()
             agg_loss_mul= torch.tensor(0.0).cuda()
             agg_loss_evi= torch.tensor(0.0).cuda()
             for i in range(3):
@@ -440,7 +440,7 @@ def train_target_primary(args,dset_loaders,netF,netB,netC,netE,netEC,primary_idx
             unc=EPU[tar_idx].unsqueeze(1)
             targets=targets_1*(1-0.5*unc)+targets_2*(0.5*unc)
             smoothed=(pse_smooth_mask[tar_idx]==1)
-            #print("len smooth",sum(smoothed),'acc',test_acc(pred_u1,smoothed,all_label[tar_idx]))
+            
             targets_1[smoothed,:]=targets[smoothed,:]
             targets_smooth=targets_1.cuda()
 
@@ -449,8 +449,8 @@ def train_target_primary(args,dset_loaders,netF,netB,netC,netE,netEC,primary_idx
 
             
             lc_mask=local_inconsistency_mask[tar_idx].cuda()
-            features_test = netB(netF(all_inputs))
-            outputs_test = netC(features_test)
+            features_test = mddn_C1(mddn_F(all_inputs))
+            outputs_test = mddn_C2(features_test)
             softmax_out = nn.Softmax(dim=1)(outputs_test)
             # output_re = softmax_out.unsqueeze(1)
 
@@ -497,23 +497,23 @@ def train_target_primary(args,dset_loaders,netF,netB,netC,netE,netEC,primary_idx
             optimizer.step()
 
     
-        netF.eval()
-        netB.eval()
-        netE.eval()
-        netEC.eval()
+        mddn_F.eval()
+        mddn_C1.eval()
+        mddn_E1.eval()
+        mddn_E2.eval()
         if args.dset=='VISDA-C':
-            acc_s_te, acc_list = cal_acc(dset_loaders['test'], netF, netB, netC, True)
+            acc_s_te, acc_list = cal_acc(dset_loaders['test'], mddn_F, mddn_C1, mddn_C2, True)
             log_str = 'Task: {}, Iter:{}/{}; Accuracy = {:.2f}%'.format(args.name, epoch, fuse_epoch, acc_s_te) + '\n' + acc_list
         else:
-            acc_s_te, _ = cal_acc(dset_loaders['test'], netF, netB, netC, False)
+            acc_s_te, _ = cal_acc(dset_loaders['test'], mddn_F, mddn_C1, mddn_C2, False)
             log_str = 'Task: {}, Iter:{}/{}; Accuracy = {:.2f}%'.format(args.name, epoch,  fuse_epoch, acc_s_te)
 
         
         print(log_str+'\n')
-        netF.train()
-        netB.train()
-        netE.train()
-        netEC.train()
+        mddn_F.train()
+        mddn_C1.train()
+        mddn_E1.train()
+        mddn_E2.train()
             
         #optimizer_c.step()
             
@@ -534,8 +534,8 @@ def train_target_primary(args,dset_loaders,netF,netB,netC,netE,netEC,primary_idx
         #     lr_scheduler(optimizer, iter_num=iter_num, max_iter=max_iter)
         #     lr_scheduler(optimizer_c, iter_num=iter_num, max_iter=max_iter)
         #     inputs_test = inputs_test.cuda()
-        #     features_test = netB(netF(inputs_test))
-        #     outputs_test = netC(features_test)
+        #     features_test = mddn_C1(mddn_F(inputs_test))
+        #     outputs_test = mddn_C2(features_test)
         #     if args.cls_par > 0:
         #         pred = mem_label[tar_idx]
         #         agg_loss = nn.CrossEntropyLoss()(outputs_test, pred)
@@ -568,14 +568,14 @@ def train_target_primary(args,dset_loaders,netF,netB,netC,netE,netEC,primary_idx
     
 
     # if args.issave:   
-    #     torch.save(netF.state_dict(), osp.join(args.output_dir, "target_F"  + ".pt"))
-    #     torch.save(netB.state_dict(), osp.join(args.output_dir, "target_B"  + ".pt"))
-    #     torch.save(netC.state_dict(), osp.join(args.output_dir, "target_C"  + ".pt"))
+    #     torch.save(mddn_F.state_dict(), osp.join(args.output_dir, "target_F"  + ".pt"))
+    #     torch.save(mddn_C1.state_dict(), osp.join(args.output_dir, "target_B"  + ".pt"))
+    #     torch.save(mddn_C2.state_dict(), osp.join(args.output_dir, "target_C"  + ".pt"))
         
-    return netF, netB, netC
+    return mddn_F, mddn_C1, mddn_C2
 
 
-def cal_acc(loader, netF, netB, netC, flag=False):
+def cal_acc(loader, mddn_F, mddn_C1, mddn_C2, flag=False):
     start_test = True
     with torch.no_grad():
         iter_test = iter(loader)
@@ -584,7 +584,7 @@ def cal_acc(loader, netF, netB, netC, flag=False):
             inputs = data[0]
             labels = data[1]
             inputs = inputs.cuda()
-            outputs = netC(netB(netF(inputs)))
+            outputs = mddn_C2(mddn_C1(mddn_F(inputs)))
             if start_test:
                 all_output = outputs.float().cpu()
                 all_label = labels.float()
@@ -607,7 +607,7 @@ def cal_acc(loader, netF, netB, netC, flag=False):
         return accuracy*100, mean_ent
 
 
-def obtain_label2(loader, netF, netB, netC,netE, netEC, args):
+def obtain_label2(loader, mddn_F, mddn_C1, mddn_C2,mddn_E1, mddn_E2, args):
     start_test = True
     with torch.no_grad():
         iter_test = iter(loader)
@@ -616,12 +616,12 @@ def obtain_label2(loader, netF, netB, netC,netE, netEC, args):
             inputs = data[0]
             labels = data[1]
             inputs = inputs.cuda()
-            fea = (netF(inputs))
+            fea = (mddn_F(inputs))
             #pdb.set_trace()
-            evidence = netEC(netE(fea))
-            feas=netB(fea)
+            evidence = mddn_E2(mddn_E1(fea))
+            feas=mddn_C1(fea)
             
-            outputs = netC(feas)
+            outputs = mddn_C2(feas)
             if start_test:
                 all_fea = feas.float().cpu()
                 all_output = outputs.float().cpu()
@@ -677,7 +677,7 @@ def obtain_label2(loader, netF, netB, netC,netE, netEC, args):
 
     
 
-def obtain_label(loader, netF, netB, netC,netE, netEC,primary_idx,all_o_list, all_f_list,all_e_list,args):
+def obtain_label(loader, mddn_F, mddn_C1, mddn_C2,mddn_E1, mddn_E2,primary_idx,all_o_list, all_f_list,all_e_list,args):
     start_test = True
     with torch.no_grad():
         iter_test = iter(loader)
@@ -686,12 +686,12 @@ def obtain_label(loader, netF, netB, netC,netE, netEC,primary_idx,all_o_list, al
             inputs = data[0]
             labels = data[1]
             inputs = inputs.cuda()
-            fea = (netF(inputs))
+            fea = (mddn_F(inputs))
             #pdb.set_trace()
-            evidence = netEC(netE(fea))
-            feas=netB(fea)
+            evidence = mddn_E2(mddn_E1(fea))
+            feas=mddn_C1(fea)
             
-            outputs = netC(feas)
+            outputs = mddn_C2(feas)
             if start_test:
                 all_fea = feas.float().cpu()
                 all_output = outputs.float().cpu()
@@ -780,36 +780,36 @@ def initial(net,args):
     for i in range(len(args.src)):
         modelpath = args.output_dir_src[i] + '/source_F.pt'
         #print(modelpath)
-        net.netF[i].load_state_dict(torch.load(modelpath))
-        net.netF[i].eval()
-        for k, v in net.netF[i].named_parameters():
+        net.mddn_F[i].load_state_dict(torch.load(modelpath))
+        net.mddn_F[i].eval()
+        for k, v in net.mddn_F[i].named_parameters():
             param_group += [{'params': v, 'lr': args.lr * args.lr_decay1}]
 
         modelpath = args.output_dir_src[i] + '/source_B.pt'
         #print(modelpath)
-        net.netB[i].load_state_dict(torch.load(modelpath))
-        net.netB[i].eval()
+        net.mddn_C1[i].load_state_dict(torch.load(modelpath))
+        net.mddn_C1[i].eval()
 
-        for k, v in net.netB[i].named_parameters():
+        for k, v in net.mddn_C1[i].named_parameters():
             param_group += [{'params': v, 'lr': args.lr * args.lr_decay2}]
 
         modelpath = args.output_dir_src[i] + '/source_C.pt'
         #print(modelpath)
-        net.netC[i].load_state_dict(torch.load(modelpath))
-        net.netC[i].eval()
-        for k, v in net.netC[i].named_parameters():
+        net.mddn_C2[i].load_state_dict(torch.load(modelpath))
+        net.mddn_C2[i].eval()
+        for k, v in net.mddn_C2[i].named_parameters():
             v.requires_grad = False
         modelpath = args.output_dir_src[i] + '/source_E.pt'
         #print(modelpath)
-        net.netE[i].load_state_dict(torch.load(modelpath))
-        net.netE[i].eval()
-        for k, v in net.netE[i].named_parameters():
+        net.mddn_E1[i].load_state_dict(torch.load(modelpath))
+        net.mddn_E1[i].eval()
+        for k, v in net.mddn_E1[i].named_parameters():
             param_group += [{'params': v, 'lr': args.lr * args.lr_decay2}]
         modelpath = args.output_dir_src[i] + '/source_EC.pt'
         #print(modelpath)
-        net.netEC[i].load_state_dict(torch.load(modelpath))
-        net.netEC[i].eval()    
-        for k, v in net.netEC[i].named_parameters():
+        net.mddn_E2[i].load_state_dict(torch.load(modelpath))
+        net.mddn_E2[i].eval()    
+        for k, v in net.mddn_E2[i].named_parameters():
             v.requires_grad = False
     optimizer = optim.SGD(param_group)
     optimizer = op_copy(optimizer)
@@ -819,23 +819,23 @@ def train_target(args):
     dset_loaders,dsets = data_load(args)
     ## set base network
     if args.net[0:3] == 'res':
-        netF_list = [network.ResBase(res_name=args.net).cuda() for i in range(len(args.src))]
+        mddn_F_list = [network.ResBase(res_name=args.net).cuda() for i in range(len(args.src))]
       
-    eauf args.net[0:3] == 'vgg':
-        netF_list = [network.VGGBase(vgg_name=args.net).cuda() for i in range(len(args.src))]
+    elif args.net[0:3] == 'vgg':
+        mddn_F_list = [network.VGGBase(vgg_name=args.net).cuda() for i in range(len(args.src))]
 
-    netB_list = [network.feat_bottleneck(type=args.classifier, feature_dim=netF_list[i].in_features,
+    mddn_C1_list = [network.feat_bottleneck(type=args.classifier, feature_dim=mddn_F_list[i].in_features,
                                          bottleneck_dim=args.bottleneck).cuda() for i in range(len(args.src))]
                                     
-    netC_list = [network.feat_classifier(type=args.layer, class_num=args.class_num, bottleneck_dim=args.bottleneck).cuda() for i in range(len(args.src))]
+    mddn_C2_list = [network.feat_classifier(type=args.layer, class_num=args.class_num, bottleneck_dim=args.bottleneck).cuda() for i in range(len(args.src))]
     
-    netE_list = [network.feat_bottleneck(type=args.classifier, feature_dim=netF_list[i].in_features,
+    mddn_E1_list = [network.feat_bottleneck(type=args.classifier, feature_dim=mddn_F_list[i].in_features,
                                          bottleneck_dim=args.bottleneck).cuda() for i in range(len(args.src))]
-    netEC_list = [network.evidence_classifier(type='linear', class_num=args.class_num, bottleneck_dim=args.bottleneck).cuda() for i in range(len(args.src))]
+    mddn_E2_list = [network.evidence_classifier(type='linear', class_num=args.class_num, bottleneck_dim=args.bottleneck).cuda() for i in range(len(args.src))]
    
     
     #netQ = network.MyLinear(256,256).cuda()
-    net=network.ME(netF_list,netB_list,netC_list,netE_list,netEC_list,args.class_num,len(args.src), args.max_epoch * len(dset_loaders["target"]) // args.interval)
+    net=network.ME(mddn_F_list,mddn_C1_list,mddn_C2_list,mddn_E1_list,mddn_E2_list,args.class_num,len(args.src), args.max_epoch * len(dset_loaders["target"]) // args.interval)
 
    
     
@@ -857,71 +857,9 @@ def train_target(args):
         print(accuracy)
     max_model=np.argmax(np.array(consistency))
     print('max_model',max_model)
-    net=train_target_primary(args,dset_loaders,net.netF[max_model],net.netB[max_model],net.netC[max_model],net.netE[max_model],net.netEC[max_model],max_model,unc,evi_list,out_list,pse_list,all_f_list)
+    net=train_target_primary(args,dset_loaders,net.mddn_F[max_model],net.mddn_C1[max_model],net.mddn_C2[max_model],net.mddn_E1[max_model],net.mddn_E2[max_model],max_model,unc,evi_list,out_list,pse_list,all_f_list)
     
                         
-
-
-
-def sub_pse_label(loader, net):
-    start_test = True
-    with torch.no_grad():
-        iter_test = iter(loader)
-        for _ in range(len(loader)):
-            data = iter_test.next()
-            inputs = data[0]
-            labels = data[1]
-            inputs = inputs.cuda()
-            _,out_list,f_list=net.forward(inputs,'test',-1)
-
-            if start_test:
-
-                all_label = labels.float()
-                all_f_list=dict()
-                all_o_list=dict()
-               
-                for i in range(net.source):
-                    all_f_list[i]=f_list[i].float().cpu()
-                    all_o_list[i]=out_list[i].float().cpu()
-                    
-                start_test = False
-
-            else:
-               
-                all_label = torch.cat((all_label, labels.float()), 0)
-              
-                for i in range(net.source):
-                    all_o_list[i] = torch.cat((all_o_list[i], out_list[i].float().cpu()), 0)
-
-                    all_f_list[i] = torch.cat((all_f_list[i], f_list[i].float().cpu()), 0)
-   
-    
-    pred=dict()
-    pred_label_list=dict()
-    dd=dict()
-    initc=dict()
-    for i in range(net.source):
-        _, predict = torch.max(all_o_list[i], 1)
-        accuracy = torch.sum(torch.squeeze(predict).float() == all_label).item() / float(all_label.size()[0])
-        print('virtual: teacher model',i,':',accuracy)
- 
-
-    
-    for i in range(net.source):
-        _, pred[i]= torch.max(all_o_list[i], 1)
-        pred_label_list[i],dd[i],initc[i]=cluster(nn.Softmax(1)(all_o_list[i]),all_f_list[i],all_label)
-      
-        acc = np.sum(pred_label_list[i] == all_label.float().numpy()) /(all_label.shape[0])
-        # #pred_label_list[i]=pred_label_list[i].detach()
-        # #initc[i]=initc[i].detach()
-        # all_f_list[i]=all_f_list[i].detach()
-        # #pred_label_list[i]=torch.from_numpy(pred_label_list[i].astype('int'))
-        log_str = 'virtual: Accuracy of model {} -> {:.2f}%'.format(i,acc * 100)
-        print(log_str)
-
-    
-    return pred_label_list,all_o_list,all_f_list,all_label
-
 
 
 def pre_infer(loader, net):
@@ -981,7 +919,7 @@ def pre_infer(loader, net):
         print('model:',i,'acc:' ,accuracy,' evi:',torch.max(all_evi_list[i]))
         x=sigma3(torch.sum(all_evi_list[i],1),3)
         #x=sigma3(torch.max(all_evi_list[i],1)[0],3)
-        print('test_evi',test_acc(pred[i],x[0],all_label),test_acc(pred[i],x[1],all_label))
+       
     all_pse_list=dict()
     dd=dict()
     initc=dict()
@@ -994,9 +932,6 @@ def pre_infer(loader, net):
         # #initc[i]=initc[i].detach()
         # all_f_list[i]=all_f_list[i].detach()
         all_pse_list[i]=torch.from_numpy(all_pse_list[i].astype('int'))
-        log_str = 'virtual: Accuracy of model {} -> {:.2f}%'.format(i,acc * 100)
-        print(log_str)
-        print('test_evi',test_acc(all_pse_list[i],x[0],all_label),test_acc(all_pse_list[i],x[1],all_label))
     
         all_f_list[i]=all_f_list[i].float().cpu()#.numpy()
     return  all_o_list,all_evi_list,all_pse_list,all_f_list,all_label
@@ -1007,19 +942,6 @@ def pre_infer(loader, net):
     
     
     
-
-def test_acc(predict,hcl,all_label):
-    hcl=torch.tensor(hcl)
-   
-    acc=torch.sum(torch.squeeze(predict[hcl]).cpu().float() == all_label[hcl]).item() / float(all_label[hcl].size()[0])
-    return acc
-    
-def test_acc_from_prob(prob,hcl,all_label,k=0):
-    hcl=torch.tensor(hcl)
-    values, indices=prob.topk(k+1,dim=1, largest=True, sorted=True)
-    predict=indices[:,k].detach()
-    acc=torch.sum(torch.squeeze(predict[hcl]).cpu().float() == all_label[hcl]).item() / float(all_label[hcl].size()[0])
-    return acc
    
   
 
