@@ -57,11 +57,11 @@ def image_test(resize_size=256, crop_size=224, alexnet=False):
         normalize
     ])
 
-def model_forward(netF,netB,netC,netE,netEC, X, y, classes,global_step,annealing_step):
-    fea=netF(X)
-    output=netC(netB(fea))
+def model_forward(mddn_F,mddn_C1,mddn_C2,mddn_E1,mddn_E2, X, y):
+    fea=mddn_F(X)
+    output=mddn_C2(mddn_C1(fea))
     #pred=(torch.argmax(output)).detach()
-    evidence = netEC(netE(fea))
+    evidence = mddn_E2(mddn_E1(fea))
 
     alpha = evidence+1
     #pred_y=output.detach().clone()
@@ -105,7 +105,7 @@ def data_load(args):
 
     return dset_loaders
 
-def cal_acc(loader, netF, netB, netC, flag=False):
+def cal_acc(loader, mddn_F, mddn_C1, mddn_C2, flag=False):
     start_test = True
     with torch.no_grad():
         iter_test = iter(loader)
@@ -114,8 +114,8 @@ def cal_acc(loader, netF, netB, netC, flag=False):
             inputs = data[0]
             labels = data[1]
             inputs = inputs.cuda()
-            outputs = (netB(netF(inputs)))
-            outputs = netC(outputs)#simple_transform(outputs,1.3))
+            outputs = (mddn_C1(mddn_F(inputs)))
+            outputs = mddn_C2(outputs)#simple_transform(outputs,1.3))
             if start_test:
                 all_output = outputs.float().cpu()
                 all_label = labels.float()
@@ -139,40 +139,40 @@ def cal_acc(loader, netF, netB, netC, flag=False):
     else:
         return accuracy*100, mean_ent
 
-def train_source(args):
+def train_source_step1(args):
     dset_loaders = data_load(args)
     ## set base network
     if args.net[0:3] == 'res':
-        netF = network.ResBase(res_name=args.net).cuda()
+        mddn_F = network.ResBase(res_name=args.net).cuda()
     elif args.net[0:3] == 'vgg':
-        netF = network.VGGBase(vgg_name=args.net).cuda()  
+        mddn_F = network.VGGBase(vgg_name=args.net).cuda()  
 
-    netB = network.feat_bottleneck(type=args.bn, feature_dim=netF.in_features, bottleneck_dim=args.bottleneck).cuda()
-    netC = network.feat_classifier(type=args.layer, class_num = args.class_num, bottleneck_dim=args.bottleneck).cuda()
-    netE=network.feat_bottleneck(type=args.bn, feature_dim=netF.in_features, bottleneck_dim=args.bottleneck).cuda()
-    netEC = network.evidence_classifier(type='linear', class_num = args.class_num, bottleneck_dim=args.bottleneck).cuda()
+    mddn_C1 = network.feat_bottleneck(type=args.bn, feature_dim=mddn_F.in_features, bottleneck_dim=args.bottleneck).cuda()
+    mddn_C2 = network.feat_classifier(type=args.layer, class_num = args.class_num, bottleneck_dim=args.bottleneck).cuda()
+    mddn_E1=network.feat_bottleneck(type=args.bn, feature_dim=mddn_F.in_features, bottleneck_dim=args.bottleneck).cuda()
+    mddn_E2 = network.evidence_classifier(type='linear', class_num = args.class_num, bottleneck_dim=args.bottleneck).cuda()
     param_group = []
     learning_rate = args.lr
 
-    for k, v in netF.named_parameters():
+    for k, v in mddn_F.named_parameters():
         param_group += [{'params': v, 'lr': learning_rate*0.1}]
-    for k, v in netB.named_parameters():
+    for k, v in mddn_C1.named_parameters():
         param_group += [{'params': v, 'lr': learning_rate}]
-    for k, v in netC.named_parameters():
+    for k, v in mddn_C2.named_parameters():
         param_group += [{'params': v, 'lr': learning_rate}] 
     optimizer = optim.SGD(param_group)
     optimizer = op_copy(optimizer)
 
     acc_init = 0
-    max_iter = args.max_epoch * len(dset_loaders["source_tr"])
+    max_iter = args.max_epoch * len(dset_loaders["source_tr"])//2
     interval_iter = max_iter
     iter_num = 0
 
-    netF.train()
-    netB.train()
-    netC.train()
-    netEC.train()
-    netE.train()
+    mddn_F.train()
+    mddn_C1.train()
+    mddn_C2.train()
+    mddn_E2.train()
+    mddn_E1.train()
     while iter_num < max_iter:
         try:
             inputs_source, labels_source = iter_source.next()
@@ -187,19 +187,19 @@ def train_source(args):
         lr_scheduler(optimizer, iter_num=iter_num, max_iter=max_iter)
 
         inputs_source, labels_source = inputs_source.cuda(), labels_source.cuda()
-        #outputs_source = netC(netB(netF(inputs_source)))
+        #outputs_source = mddn_C2(mddn_C1(mddn_F(inputs_source)))
 
         #classifier_loss = CrossEntropyLabelSmooth(num_classes=args.class_num, epsilon=args.smooth)(outputs_source, labels_source)            
-        _,classifier_loss=model_forward(netF,netB,netC,netE,netEC,inputs_source,labels_source,args.class_num,iter_num,max_iter)
+        _,classifier_loss=model_forward(mddn_F,mddn_C1,mddn_C2,mddn_E1,mddn_E2,inputs_source,labels_source)
         optimizer.zero_grad()
         classifier_loss.backward()
         optimizer.step()
 
         if iter_num % interval_iter == 0 or iter_num == max_iter:
-            netF.eval()
-            netB.eval()
-            netC.eval()
-            acc_s_te, _ = cal_acc(dset_loaders['source_te'], netF, netB, netC,False)
+            mddn_F.eval()
+            mddn_C1.eval()
+            mddn_C2.eval()
+            acc_s_te, _ = cal_acc(dset_loaders['source_te'], mddn_F, mddn_C1, mddn_C2,False)
             log_str = 'Task: {}, Iter:{}/{}; Accuracy = {:.2f}%'.format(args.name_src, iter_num, max_iter, acc_s_te)
             args.out_file.write(log_str + '\n')
             args.out_file.flush()
@@ -207,21 +207,21 @@ def train_source(args):
 
             if acc_s_te >= acc_init:
                 acc_init = acc_s_te
-                best_netF = netF.state_dict()
-                best_netB = netB.state_dict()
-                best_netC = netC.state_dict()
-                best_netE = netE.state_dict()
-                best_netEC = netEC.state_dict()
-            netF.train()
-            netB.train()
-            netC.train()
+                best_mddn_F = mddn_F.state_dict()
+                best_mddn_C1 = mddn_C1.state_dict()
+                best_mddn_C2 = mddn_C2.state_dict()
+                best_mddn_E1 = mddn_E1.state_dict()
+                best_mddn_E2 = mddn_E2.state_dict()
+            mddn_F.train()
+            mddn_C1.train()
+            mddn_C2.train()
                 
-    torch.save(best_netF, osp.join(args.output_dir_src, "source_F.pt"))
-    torch.save(best_netB, osp.join(args.output_dir_src, "source_B.pt"))
-    torch.save(best_netC, osp.join(args.output_dir_src, "source_C.pt"))
-    torch.save(best_netE, osp.join(args.output_dir_src, "source_E.pt"))
-    torch.save(best_netEC, osp.join(args.output_dir_src, "source_EC.pt"))
-    return netF, netB, netC
+    torch.save(best_mddn_F, osp.join(args.output_dir_src, "source_F.pt"))
+    torch.save(best_mddn_C1, osp.join(args.output_dir_src, "source_B.pt"))
+    torch.save(best_mddn_C2, osp.join(args.output_dir_src, "source_C.pt"))
+    torch.save(best_mddn_E1, osp.join(args.output_dir_src, "source_E.pt"))
+    torch.save(best_mddn_E2, osp.join(args.output_dir_src, "source_EC.pt"))
+    return mddn_F, mddn_C1, mddn_C2
 def simple_transform(x, beta):
             x = 1/torch.pow(torch.log(1/x+1),beta)
             return x
@@ -229,24 +229,24 @@ def test_target(args):
     dset_loaders = data_load(args)
     ## set base network
     if args.net[0:3] == 'res':
-        netF = network.ResBase(res_name=args.net).cuda()
+        mddn_F = network.ResBase(res_name=args.net).cuda()
     elif args.net[0:3] == 'vgg':
-        netF = network.VGGBase(vgg_name=args.net).cuda()  
+        mddn_F = network.VGGBase(vgg_name=args.net).cuda()  
 
-    netB = network.feat_bottleneck(type=args.bn, feature_dim=netF.in_features, bottleneck_dim=args.bottleneck).cuda()
-    netC = network.evidence_classifier(type=args.layer, class_num = args.class_num, bottleneck_dim=args.bottleneck).cuda()
+    mddn_C1 = network.feat_bottleneck(type=args.bn, feature_dim=mddn_F.in_features, bottleneck_dim=args.bottleneck).cuda()
+    mddn_C2 = network.evidence_classifier(type=args.layer, class_num = args.class_num, bottleneck_dim=args.bottleneck).cuda()
     
     args.modelpath = args.output_dir_src + '/source_F.pt'   
-    netF.load_state_dict(torch.load(args.modelpath))
+    mddn_F.load_state_dict(torch.load(args.modelpath))
     args.modelpath = args.output_dir_src + '/source_B.pt'   
-    netB.load_state_dict(torch.load(args.modelpath))
+    mddn_C1.load_state_dict(torch.load(args.modelpath))
     args.modelpath = args.output_dir_src + '/source_C.pt'   
-    netC.load_state_dict(torch.load(args.modelpath))
-    netF.eval()
-    netB.eval()
-    netC.eval()
+    mddn_C2.load_state_dict(torch.load(args.modelpath))
+    mddn_F.eval()
+    mddn_C1.eval()
+    mddn_C2.eval()
 
-    acc, _ = cal_acc_test(dset_loaders['test'], netF, netB, netC, False,args)
+    acc, _ = cal_acc_test(dset_loaders['test'], mddn_F, mddn_C1, mddn_C2, False,args)
     log_str = '\nTraining: {}, Task: {}, Accuracy = {:.2f}%'.format(args.trte, args.name, acc)
 
     args.out_file.write(log_str)
@@ -258,7 +258,7 @@ def print_args(args):
     for arg, content in args.__dict__.items():
         s += "{}:{}\n".format(arg, content)
     return s
-def cal_acc_test(loader, netF, netB, netC,flag,args):
+def cal_acc_test(loader, mddn_F, mddn_C1, mddn_C2,flag,args):
    
     start_test = True
     with torch.no_grad():
@@ -270,8 +270,8 @@ def cal_acc_test(loader, netF, netB, netC,flag,args):
 
             inputs = inputs.cuda()
             
-            features = (netB(netF((inputs))))
-            outputs = netC(features)#+1#simple_transform(outputs,1.3))
+            features = (mddn_C1(mddn_F((inputs))))
+            outputs = mddn_C2(features)#+1#simple_transform(outputs,1.3))
             
            
 
@@ -359,52 +359,52 @@ def cal_acc_test(loader, netF, netB, netC,flag,args):
         return accuracy*100, mean_ent
 
 
-def train_source2(args):
+def train_source_step2(args):
     dset_loaders = data_load(args)
     ## set base network
     if args.net[0:3] == 'res':
-        netF = network.ResBase(res_name=args.net).cuda()
+        mddn_F = network.ResBase(res_name=args.net).cuda()
     elif args.net[0:3] == 'vgg':
-        netF = network.VGGBase(vgg_name=args.net).cuda()  
+        mddn_F = network.VGGBase(vgg_name=args.net).cuda()  
 
-    netB = network.feat_bottleneck(type=args.bn, feature_dim=netF.in_features, bottleneck_dim=args.bottleneck).cuda()
-    netC = network.feat_classifier(type=args.layer, class_num = args.class_num, bottleneck_dim=args.bottleneck).cuda()
-    netE=network.feat_bottleneck(type=args.bn, feature_dim=netF.in_features, bottleneck_dim=args.bottleneck).cuda()
-    netEC = network.evidence_classifier(type='linear', class_num = args.class_num, bottleneck_dim=args.bottleneck).cuda()
+    mddn_C1 = network.feat_bottleneck(type=args.bn, feature_dim=mddn_F.in_features, bottleneck_dim=args.bottleneck).cuda()
+    mddn_C2 = network.feat_classifier(type=args.layer, class_num = args.class_num, bottleneck_dim=args.bottleneck).cuda()
+    mddn_E1=network.feat_bottleneck(type=args.bn, feature_dim=mddn_F.in_features, bottleneck_dim=args.bottleneck).cuda()
+    mddn_E2 = network.evidence_classifier(type='linear', class_num = args.class_num, bottleneck_dim=args.bottleneck).cuda()
     param_group = []
     learning_rate = args.lr
     modelpath = args.output_dir_src_source + '/source_F.pt'   
-    netF.load_state_dict(torch.load(modelpath))
-    netB = network.feat_bottleneck(type=args.bn, feature_dim=netF.in_features, bottleneck_dim=args.bottleneck).cuda()
+    mddn_F.load_state_dict(torch.load(modelpath))
+    mddn_C1 = network.feat_bottleneck(type=args.bn, feature_dim=mddn_F.in_features, bottleneck_dim=args.bottleneck).cuda()
     modelpath = args.output_dir_src_source + '/source_B.pt'   
-    netB.load_state_dict(torch.load(modelpath))
+    mddn_C1.load_state_dict(torch.load(modelpath))
     
-    netC = network.feat_classifier(type=args.layer, class_num = args.class_num, bottleneck_dim=args.bottleneck).cuda()
+    mddn_C2 = network.feat_classifier(type=args.layer, class_num = args.class_num, bottleneck_dim=args.bottleneck).cuda()
     modelpath = args.output_dir_src_source + '/source_C.pt'   
-    netC.load_state_dict(torch.load(modelpath))
-    for k, v in netF.named_parameters():
+    mddn_C2.load_state_dict(torch.load(modelpath))
+    for k, v in mddn_F.named_parameters():
         param_group += [{'params': v, 'lr': learning_rate*0.1}]
-    for k, v in netB.named_parameters():
+    for k, v in mddn_C1.named_parameters():
         param_group += [{'params': v, 'lr': learning_rate}]
-    for k, v in netC.named_parameters():
+    for k, v in mddn_C2.named_parameters():
         param_group += [{'params': v, 'lr': learning_rate}] 
-    for k, v in netE.named_parameters():
+    for k, v in mddn_E1.named_parameters():
         param_group += [{'params': v, 'lr': learning_rate}] 
-    for k, v in netEC.named_parameters():
+    for k, v in mddn_E2.named_parameters():
         param_group += [{'params': v, 'lr': learning_rate}]   
     optimizer = optim.SGD(param_group)
     optimizer = op_copy(optimizer)
 
     acc_init = 0
-    max_iter = args.max_epoch * len(dset_loaders["source_tr"])
+    max_iter = args.max_epoch * len(dset_loaders["source_tr"])//2
     interval_iter = max_iter#// 2
     iter_num = 0
 
-    netF.train()
-    netB.train()
-    netC.train()
-    netEC.train()
-    netE.train()
+    mddn_F.train()
+    mddn_C1.train()
+    mddn_C2.train()
+    mddn_E2.train()
+    mddn_E1.train()
     while iter_num < max_iter:
         try:
             inputs_source, labels_source = iter_source.next()
@@ -419,19 +419,19 @@ def train_source2(args):
         lr_scheduler(optimizer, iter_num=iter_num, max_iter=max_iter)
 
         inputs_source, labels_source = inputs_source.cuda(), labels_source.cuda()
-        #outputs_source = netC(netB(netF(inputs_source)))
+        #outputs_source = mddn_C2(mddn_C1(mddn_F(inputs_source)))
 
         #classifier_loss = CrossEntropyLabelSmooth(num_classes=args.class_num, epsilon=args.smooth)(outputs_source, labels_source)            
-        _,classifier_loss=model_forward(netF,netB,netC,netE,netEC,inputs_source,labels_source,args.class_num,iter_num,max_iter)
+        _,classifier_loss=model_forward(mddn_F,mddn_C1,mddn_C2,mddn_E1,mddn_E2,inputs_source,labels_source)
         optimizer.zero_grad()
         classifier_loss.backward()
         optimizer.step()
 
         if iter_num % interval_iter == 0 or iter_num == max_iter:
-            netF.eval()
-            netB.eval()
-            netC.eval()
-            acc_s_te, _ = cal_acc(dset_loaders['source_te'], netF, netB, netC,False)
+            mddn_F.eval()
+            mddn_C1.eval()
+            mddn_C2.eval()
+            acc_s_te, _ = cal_acc(dset_loaders['source_te'], mddn_F, mddn_C1, mddn_C2,False)
             log_str = 'Task: {}, Iter:{}/{}; Accuracy = {:.2f}%'.format(args.name_src, iter_num, max_iter, acc_s_te)
             args.out_file.write(log_str + '\n')
             args.out_file.flush()
@@ -439,21 +439,21 @@ def train_source2(args):
 
             if acc_s_te >= acc_init:
                 acc_init = acc_s_te
-                best_netF = netF.state_dict()
-                best_netB = netB.state_dict()
-                best_netC = netC.state_dict()
-                best_netE = netE.state_dict()
-                best_netEC = netEC.state_dict()
-            netF.train()
-            netB.train()
-            netC.train()
+                best_mddn_F = mddn_F.state_dict()
+                best_mddn_C1 = mddn_C1.state_dict()
+                best_mddn_C2 = mddn_C2.state_dict()
+                best_mddn_E1 = mddn_E1.state_dict()
+                best_mddn_E2 = mddn_E2.state_dict()
+            mddn_F.train()
+            mddn_C1.train()
+            mddn_C2.train()
                 
-    torch.save(best_netF, osp.join(args.output_dir_src, "source_F.pt"))
-    torch.save(best_netB, osp.join(args.output_dir_src, "source_B.pt"))
-    torch.save(best_netC, osp.join(args.output_dir_src, "source_C.pt"))
-    torch.save(best_netE, osp.join(args.output_dir_src, "source_E.pt"))
-    torch.save(best_netEC, osp.join(args.output_dir_src, "source_EC.pt"))
-    return netF, netB, netC
+    torch.save(best_mddn_F, osp.join(args.output_dir_src, "source_F.pt"))
+    torch.save(best_mddn_C1, osp.join(args.output_dir_src, "source_B.pt"))
+    torch.save(best_mddn_C2, osp.join(args.output_dir_src, "source_C.pt"))
+    torch.save(best_mddn_E1, osp.join(args.output_dir_src, "source_E.pt"))
+    torch.save(best_mddn_E2, osp.join(args.output_dir_src, "source_EC.pt"))
+    return mddn_F, mddn_C1, mddn_C2
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='CAiDA')
@@ -488,7 +488,7 @@ if __name__ == "__main__":
     torch.cuda.manual_seed(SEED)
     np.random.seed(SEED)
     random.seed(SEED)
-
+    
     for k in range(len(names)):
         args.s=k
         folder = '/home/spi/peijiangbo/'
@@ -506,8 +506,8 @@ if __name__ == "__main__":
         args.out_file.write(print_args(args)+'\n')
         args.out_file.flush()
 
-        train_source(args)
-        train_source2(args)
+        train_source_step1(args)
+        train_source_step2(args) #add evi
         args.out_file = open(osp.join(args.output_dir_src, 'log_test_transform.txt'), 'w')
         for i in range(len(names)):
             if i == args.s:
