@@ -171,8 +171,8 @@ def train_source_step1(args):
     mddn_F.train()
     mddn_C1.train()
     mddn_C2.train()
-    mddn_E2.train()
-    mddn_E1.train()
+    mddn_E2.eval()
+    mddn_E1.eval()
     while iter_num < max_iter:
         try:
             inputs_source, labels_source = iter_source.next()
@@ -205,23 +205,12 @@ def train_source_step1(args):
             args.out_file.flush()
             print(log_str+'\n')
 
-            if acc_s_te >= acc_init:
-                acc_init = acc_s_te
-                best_mddn_F = mddn_F.state_dict()
-                best_mddn_C1 = mddn_C1.state_dict()
-                best_mddn_C2 = mddn_C2.state_dict()
-                best_mddn_E1 = mddn_E1.state_dict()
-                best_mddn_E2 = mddn_E2.state_dict()
             mddn_F.train()
             mddn_C1.train()
             mddn_C2.train()
                 
-    torch.save(best_mddn_F, osp.join(args.output_dir_src, "source_F.pt"))
-    torch.save(best_mddn_C1, osp.join(args.output_dir_src, "source_B.pt"))
-    torch.save(best_mddn_C2, osp.join(args.output_dir_src, "source_C.pt"))
-    torch.save(best_mddn_E1, osp.join(args.output_dir_src, "source_E.pt"))
-    torch.save(best_mddn_E2, osp.join(args.output_dir_src, "source_EC.pt"))
-    return mddn_F, mddn_C1, mddn_C2
+  
+    return mddn_F, mddn_C1, mddn_C2,mddn_E1,mddn_E2
 def simple_transform(x, beta):
             x = 1/torch.pow(torch.log(1/x+1),beta)
             return x
@@ -359,7 +348,7 @@ def cal_acc_test(loader, mddn_F, mddn_C1, mddn_C2,flag,args):
         return accuracy*100, mean_ent
 
 
-def train_source_step2(args):
+def train_source_step2(args,mddn_F, mddn_C1, mddn_C2,mddn_E1,mddn_E2):
     dset_loaders = data_load(args)
     ## set base network
     if args.net[0:3] == 'res':
@@ -367,21 +356,10 @@ def train_source_step2(args):
     elif args.net[0:3] == 'vgg':
         mddn_F = network.VGGBase(vgg_name=args.net).cuda()  
 
-    mddn_C1 = network.feat_bottleneck(type=args.bn, feature_dim=mddn_F.in_features, bottleneck_dim=args.bottleneck).cuda()
-    mddn_C2 = network.feat_classifier(type=args.layer, class_num = args.class_num, bottleneck_dim=args.bottleneck).cuda()
-    mddn_E1=network.feat_bottleneck(type=args.bn, feature_dim=mddn_F.in_features, bottleneck_dim=args.bottleneck).cuda()
-    mddn_E2 = network.evidence_classifier(type='linear', class_num = args.class_num, bottleneck_dim=args.bottleneck).cuda()
+   
     param_group = []
     learning_rate = args.lr
-    modelpath = args.output_dir_src_source + '/source_F.pt'   
-    mddn_F.load_state_dict(torch.load(modelpath))
-    mddn_C1 = network.feat_bottleneck(type=args.bn, feature_dim=mddn_F.in_features, bottleneck_dim=args.bottleneck).cuda()
-    modelpath = args.output_dir_src_source + '/source_B.pt'   
-    mddn_C1.load_state_dict(torch.load(modelpath))
     
-    mddn_C2 = network.feat_classifier(type=args.layer, class_num = args.class_num, bottleneck_dim=args.bottleneck).cuda()
-    modelpath = args.output_dir_src_source + '/source_C.pt'   
-    mddn_C2.load_state_dict(torch.load(modelpath))
     for k, v in mddn_F.named_parameters():
         param_group += [{'params': v, 'lr': learning_rate*0.1}]
     for k, v in mddn_C1.named_parameters():
@@ -431,6 +409,8 @@ def train_source_step2(args):
             mddn_F.eval()
             mddn_C1.eval()
             mddn_C2.eval()
+            mddn_E1.eval()
+            mddn_E2.eval()
             acc_s_te, _ = cal_acc(dset_loaders['source_te'], mddn_F, mddn_C1, mddn_C2,False)
             log_str = 'Task: {}, Iter:{}/{}; Accuracy = {:.2f}%'.format(args.name_src, iter_num, max_iter, acc_s_te)
             args.out_file.write(log_str + '\n')
@@ -447,7 +427,8 @@ def train_source_step2(args):
             mddn_F.train()
             mddn_C1.train()
             mddn_C2.train()
-                
+            mddn_E1.train()
+            mddn_E2.train()
     torch.save(best_mddn_F, osp.join(args.output_dir_src, "source_F.pt"))
     torch.save(best_mddn_C1, osp.join(args.output_dir_src, "source_B.pt"))
     torch.save(best_mddn_C2, osp.join(args.output_dir_src, "source_C.pt"))
@@ -506,8 +487,8 @@ if __name__ == "__main__":
         args.out_file.write(print_args(args)+'\n')
         args.out_file.flush()
 
-        train_source_step1(args)
-        train_source_step2(args) #add evi
+        mddn_F, mddn_C1, mddn_C2,mddn_E1,mddn_E2=train_source_step1(args)
+        train_source_step2(args,mddn_F, mddn_C1, mddn_C2,mddn_E1,mddn_E2) #add evi
         args.out_file = open(osp.join(args.output_dir_src, 'log_test_transform.txt'), 'w')
         for i in range(len(names)):
             if i == args.s:
