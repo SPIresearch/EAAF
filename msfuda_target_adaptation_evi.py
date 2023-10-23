@@ -146,7 +146,13 @@ def train_target_primary(args,dset_loaders,mddn_F,mddn_C1,mddn_C2,mddn_E1,mddn_E
         """
         alpha = dict()
         alpha[0], alpha[1] = alpha1, alpha2
-        b, S, E, u = dict(), dict(), dict(), dict()
+
+        M,Q, b, S, E, u = dict(), dict(), dict(), dict(), dict(), dict()
+        for v in range(2):
+            S[v] = torch.sum(alpha[v], dim=1, keepdim=True)
+            M[v] = torch.max(alpha[v], dim=1, keepdim=True)
+            Q[v]=M[v]/S[v]
+            alpha[v]=alpha[v]*Q[v]
         for v in range(2):
             S[v] = torch.sum(alpha[v], dim=1, keepdim=True)
             E[v] = alpha[v]-1
@@ -174,7 +180,9 @@ def train_target_primary(args,dset_loaders,mddn_F,mddn_C1,mddn_C2,mddn_E1,mddn_E
         # calculate new e_k
         e_a = torch.mul(b_a, S_a.expand(b_a.shape))
         alpha_a = e_a + 1
-        
+        S_a= torch.sum(alpha_a, dim=1, keepdim=True)
+        M_a = torch.max(alpha_a, dim=1, keepdim=True)
+        alpha_a=alpha_a/M_a*S_a
         return alpha_a
     def initial(args):
         param_group = []
