@@ -153,6 +153,37 @@ class evidence_classifier(nn.Module):
         x=self.activation(x)
         return x
 
+class Res50(nn.Module):
+    def __init__(self):
+        super(Res50, self).__init__()
+        model_resnet = models.resnet50(pretrained=True)
+        self.conv1 = model_resnet.conv1
+        self.bn1 = model_resnet.bn1
+        self.relu = model_resnet.relu
+        self.maxpool = model_resnet.maxpool
+        self.layer1 = model_resnet.layer1
+        self.layer2 = model_resnet.layer2
+        self.layer3 = model_resnet.layer3
+        self.layer4 = model_resnet.layer4
+        self.avgpool = model_resnet.avgpool
+        self.in_features = model_resnet.fc.in_features
+        self.fc = model_resnet.fc
+        self.softplus=nn.Softplus()
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+        x = self.avgpool(x)
+        x = x.view(x.size(0), -1)
+        y = self.fc(x)
+        x = self.softplus(x)
+        return x, y
+
 
 class scalar(nn.Module):
     def __init__(self, init_weights):
@@ -196,7 +227,7 @@ class MyLinear(nn.Module):
 
 class ME(nn.Module):
 
-    def __init__(self, netF_list,netB_list,netC_list,netE_list,netEC_list,classes, source, lambda_epochs=1):
+    def __init__(self, mddn_f_list,mddn_C1_list,mddn_C2_list,mddn_E1_list,mddn_E2_list,classes, source, lambda_epochs=1):
         """
         :param classes: Number of classification categories
         :param source: Number of source
@@ -207,121 +238,34 @@ class ME(nn.Module):
         self.source = source
         self.classes = classes
         self.lambda_epochs = lambda_epochs
-        self.netF=nn.ModuleList()
-        self.netB=nn.ModuleList()
-        self.netC=nn.ModuleList()
-        self.netE=nn.ModuleList()
-        self.netEC=nn.ModuleList()
+        self.mddn_f=nn.ModuleList()
+        self.mddn_C1=nn.ModuleList()
+        self.mddn_C2=nn.ModuleList()
+        self.mddn_E1=nn.ModuleList()
+        self.mddn_E2=nn.ModuleList()
        
         for i in range(self.source):
-            self.netF.append(netF_list[i])
-            self.netB.append(netB_list[i])
-            self.netC.append(netC_list[i])
-            self.netE.append(netE_list[i])
-            self.netEC.append(netEC_list[i])
+            self.mddn_f.append(mddn_f_list[i])
+            self.mddn_C1.append(mddn_C1_list[i])
+            self.mddn_C2.append(mddn_C2_list[i])
+            self.mddn_E1.append(mddn_E1_list[i])
+            self.mddn_E2.append(mddn_E2_list[i])
        
 
-    def DS_Combin(self, alpha,idx):
-        """
-        :param alpha: All Dirichlet distribution parameters.
-        :return: Combined Dirichlet distribution parameters.
-        """
-        def DS_Combin_two(alpha1, alpha2,weight):
-            """
-            :param alpha1: Dirichlet distribution parameters of view 1
-            :param alpha2: Dirichlet distribution parameters of view 2
-            :return: Combined Dirichlet distribution parameters
-            """
-            alpha = dict()
-            alpha[0], alpha[1] = alpha1, alpha2
-            b, S, E, u = dict(), dict(), dict(), dict()
-            for v in range(2):
-                S[v] = torch.sum(alpha[v], dim=1, keepdim=True)
-                E[v] = alpha[v]-1
-                b[v] = E[v]/(S[v].expand(E[v].shape))
-                u[v] = self.classes/S[v]
-
-            # b^0 @ b^(0+1)
-            bb = torch.bmm(b[0].view(-1, self.classes, 1), b[1].view(-1, 1, self.classes))
-            # b^0 * u^1
-            uv1_expand = u[1].expand(b[0].shape)
-            bu = torch.mul(b[0], uv1_expand)
-            # b^1 * u^0
-            uv_expand = u[0].expand(b[0].shape)
-            ub = torch.mul(b[1], uv_expand)
-            # calculate C
-            bb_sum = torch.sum(bb, dim=(1, 2), out=None)
-            bb_diag = torch.diagonal(bb, dim1=-2, dim2=-1).sum(-1)
-            C = bb_sum - bb_diag
-
-            # calculate b^a
-            b_a = (torch.mul(b[0], b[1]) + bu + ub)/((1-C).view(-1, 1).expand(b[0].shape))
-            # calculate u^a
-            u_a = torch.mul(u[0], u[1])/((1-C).view(-1, 1).expand(u[0].shape))
-
-            # calculate new S
-            S_a = self.classes / u_a
-            # calculate new e_k
-            e_a = torch.mul(b_a, S_a.expand(b_a.shape))
-            alpha_a = e_a + 1
-            weight=torch.cat([weight,S_a.detach().clone()],1)
-            return alpha_a,weight
-        if idx==-1:
-
-            for v in range(len(alpha)-1):
-                if v==0:
-                    S = torch.sum(alpha[0], dim=1, keepdim=True)
-                    u= self.classes/S
-                    weight=S
-                    alpha_a,weight = DS_Combin_two(alpha[0], alpha[1],weight)
-                else:
-                    alpha_a,weight = DS_Combin_two(alpha_a, alpha[v+1],weight)
-        elif idx==1:
-            for v in range(len(alpha)-1):
-                if v==idx:
-                    continue
-                if v==0:
-                    S = torch.sum(alpha[0], dim=1, keepdim=True)
-                    u= self.classes/S
-                    weight=S
-                    alpha_a,weight = DS_Combin_two(alpha[0], alpha[2],weight)
-                else:
-                    alpha_a,weight = DS_Combin_two(alpha_a, alpha[v+1],weight)
-        elif idx==0:
-            for v in range(1,len(alpha)-1):
-                if v==1:
-                    S = torch.sum(alpha[1], dim=1, keepdim=True)
-                    u= self.classes/S
-                    weight=S
-                    alpha_a,weight = DS_Combin_two(alpha[1], alpha[2],weight)
-                else:
-                    alpha_a,weight = DS_Combin_two(alpha_a, alpha[v+1],weight)
-        else:
-            for v in range(len(alpha)-1):
-                if v==idx:
-                    continue
-                if v==0:
-                    S = torch.sum(alpha[0], dim=1, keepdim=True)
-                    u= self.classes/S
-                    weight=S
-                    alpha_a,weight = DS_Combin_two(alpha[0], alpha[1],weight)
-                else:
-                    alpha_a,weight = DS_Combin_two(alpha_a, alpha[v+1],weight)
-     
-        return alpha_a
+   
     def update_batch_stats(self, flag):
         for v_num in range(self.source):
-            for m in self.netF[v_num].modules():
+            for m in self.mddn_f[v_num].modules():
                 if isinstance(m, nn.BatchNorm2d):
                     m.update_batch_stats = flag
-            for m in self.netB[v_num].modules():
+            for m in self.mddn_C1[v_num].modules():
                 if isinstance(m, nn.BatchNorm2d):
                     m.update_batch_stats = flag
           
-            for m in self.netC[v_num].modules():
+            for m in self.mddn_C2[v_num].modules():
                 if isinstance(m, nn.BatchNorm2d):
                     m.update_batch_stats = flag
-            for m in self.netEC[v_num].modules():
+            for m in self.mddn_E2[v_num].modules():
                 if isinstance(m, nn.BatchNorm2d):
                     m.update_batch_stats = flag
           
@@ -352,19 +296,19 @@ class ME(nn.Module):
             self.update_batch_stats(False)
         
         if mode=='train':
-            self.netF[v_num].train()
-            self.netB[v_num].train()
-            self.netE[v_num].train()
-            #self.netC[v_num].train()
+            self.mddn_f[v_num].train()
+            self.mddn_C1[v_num].train()
+            self.mddn_E1[v_num].train()
+            #self.mddn_C2[v_num].train()
         elif mode=='test':
-            self.netF[v_num].eval()
-            self.netB[v_num].eval() 
-            self.netC[v_num].eval() 
-        f=self.netF[v_num](input)
-        feature=self.netB[v_num](f)
-        evidence=self.netEC[v_num](self.netE[v_num](f))
+            self.mddn_f[v_num].eval()
+            self.mddn_C1[v_num].eval() 
+            self.mddn_C2[v_num].eval() 
+        f=self.mddn_f[v_num](input)
+        feature=self.mddn_C1[v_num](f)
+        evidence=self.mddn_E2[v_num](self.mddn_E1[v_num](f))
 
-        out=self.netC[v_num](feature)
+        out=self.mddn_C2[v_num](feature)
         
             #prob = nn.Softmax(1)(out)
         if input_mode=='aug':
@@ -391,8 +335,7 @@ class ME(nn.Module):
                 continue  
             self.out[v_num],self.evi[v_num],self.features[v_num] = self.infer(input,v_num,mode,input_mode)
             self.alpha[v_num] = self.evi[v_num] + 1
-        self.alpha_a= self.DS_Combin(self.alpha,idx)
-        self.evidence_a = self.alpha_a - 1
+     
         return self.evi,self.out,self.features
 
  
