@@ -321,7 +321,7 @@ def train_target_primary(args,dset_loaders,mddn_F,mddn_C1,mddn_C2,mddn_E1,mddn_E
         EAU_ini=torch.log(1+(torch.sum(all_alpha)-torch.max(all_alpha,1)[0])/(torch.max(all_alpha,1)[0]))
         E_inter_pre=all_alpha/(torch.sum(all_alpha,1,keepdims=True))
         distance = fea_bank@ fea_bank.T /3
-        dis_near, idx_near = torch.topk(distance, dim=-1, largest=True, k=args.r + 1)
+        dis_near, idx_near = torch.topk(distance, dim=-1, largest=True, k=args.r + 2)
         idx_near = idx_near[:, 1:]  # batch x K
         dis_near = dis_near[:, 1:]
         
@@ -470,7 +470,7 @@ def train_target_primary(args,dset_loaders,mddn_F,mddn_C1,mddn_C2,mddn_E1,mddn_E
                 score_bank[tar_idx] = softmax_out[:features_test.shape[0]//2].detach().clone()
 
                 distance = fea_bank[tar_idx] @ fea_bank.T /3
-                dis_near, idx_near = torch.topk(distance, dim=-1, largest=True, k=args.r + 1)
+                dis_near, idx_near = torch.topk(distance, dim=-1, largest=True, k=args.r + 2)
                 idx_near = idx_near[:, 1:]  # batch x K
                 dis_near = dis_near[:, 1:]
                 score_near = score_bank[idx_near]  # batch x K x C
@@ -1075,7 +1075,7 @@ if __name__ == "__main__":
             if i != args.t:
                 continue
 
-            folder = '/home/spi/peijiangbo/'
+            folder = './data'
             args.t_dset_path = folder + args.dset + '/' + names[args.t] + '_list.txt'
             args.test_dset_path = folder + args.dset + '/' + names[args.t] + '_list.txt'
             print(args.t_dset_path)
