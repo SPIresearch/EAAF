@@ -319,15 +319,15 @@ def train_target_primary(args,dset_loaders,mddn_F,mddn_C1,mddn_C2,mddn_E1,mddn_E
         all_alpha=all_evidence+1
         
         EAU_ini=torch.log(1+(torch.sum(all_alpha)-torch.max(all_alpha,1)[0])/(torch.max(all_alpha,1)[0]))
-        E_inter_pre=all_alpha/(np.sum(all_alpha,1,keepdims=True))
+        E_inter_pre=all_alpha/(torch.sum(all_alpha,1,keepdims=True))
         distance = fea_bank@ fea_bank.T /3
         dis_near, idx_near = torch.topk(distance, dim=-1, largest=True, k=args.r + 1)
         idx_near = idx_near[:, 1:]  # batch x K
         dis_near = dis_near[:, 1:]
         
-        E_inter=np.sum(np.abs(E_inter_pre[idx_near[:,1]]-E_inter_pre))
+        E_inter=torch.sum(np.abs(E_inter_pre[idx_near[:,1]]-E_inter_pre))
         for i in range(2,args.r + 1):
-            E_inter=E_inter+np.sum(np.abs(E_inter_pre[idx_near[:,i]]-E_inter_pre))
+            E_inter=E_inter+torch.sum(np.abs(E_inter_pre[idx_near[:,i]]-E_inter_pre))
        
         EAU=EAU_ini*E_inter
 
