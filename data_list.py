@@ -162,13 +162,7 @@ class ImageList_idx(Dataset):
         mode="RGB",
     ):
         imgs = make_dataset(image_list, labels)
-        if len(imgs) == 0:
-            raise (
-                RuntimeError(
-                    "Found 0 images in subfolders of: " + root + "\n"
-                    "Supported image extensions are: " + ",".join(IMG_EXTENSIONS)
-                )
-            )
+    
 
         self.imgs = imgs
         self.transform = transform
